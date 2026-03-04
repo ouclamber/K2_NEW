@@ -27,6 +27,21 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Debug information
+        run: |
+          echo "=== ОТЛАДОЧНАЯ ИНФОРМАЦИЯ ==="
+          echo "Событие: ${{ github.event_name }}"
+          echo "Ветка PR (base): ${{ github.event.pull_request.base.ref }}"
+          echo "Ветка PR (head): ${{ github.event.pull_request.head.ref }}"
+          echo "Мерж выполнен: ${{ github.event.pull_request.merged }}"
+          echo "Коммит PR: ${{ github.event.pull_request.merge_commit_sha }}"
+          echo "Репозиторий: ${{ github.repository }}"
+          echo "================================"
+          echo "Текущая директория:"
+          pwd
+          echo "Содержимое:"
+          ls -la
+
       - name: Get current version
         id: get_current
         run: |
@@ -34,23 +49,27 @@ jobs:
             CURRENT_VERSION=$(cat VERSION)
           else
             CURRENT_VERSION="0.1.0"
+            echo "0.1.0" > VERSION
           fi
           echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-          echo "Текущая версия: $CURRENT_VERSION"
+          echo "✅ Текущая версия: $CURRENT_VERSION"
 
       - name: Determine version bump type
         id: get_type
         run: |
           COMMITS=$(git log ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} --pretty=format:"%s")
+          echo "Коммиты в PR:"
+          echo "$COMMITS"
+          
           if echo "$COMMITS" | grep -qiE "^(feat|feature):"; then
             echo "type=minor" >> $GITHUB_OUTPUT
-            echo "Тип обновления: minor"
+            echo "✅ Тип обновления: minor"
           elif echo "$COMMITS" | grep -qiE "^(fix|hotfix):"; then
             echo "type=patch" >> $GITHUB_OUTPUT
-            echo "Тип обновления: patch"
+            echo "✅ Тип обновления: patch"
           else
             echo "type=patch" >> $GITHUB_OUTPUT
-            echo "Тип обновления: patch (по умолчанию)"
+            echo "✅ Тип обновления: patch (по умолчанию)"
           fi
 
       - name: Bump version
@@ -75,43 +94,62 @@ jobs:
           echo "old_version=$CURRENT" >> $GITHUB_OUTPUT
           echo "version_type=$VERSION_TYPE" >> $GITHUB_OUTPUT
           
-          echo "Старая версия: $CURRENT"
-          echo "Новая версия: $NEW_VERSION"
-          echo "Тип: $VERSION_TYPE"
+          echo "📊 Старая версия: $CURRENT"
+          echo "📊 Новая версия: $NEW_VERSION"
+          echo "📊 Тип: $VERSION_TYPE"
 
       - name: Update VERSION file
         run: |
           echo "${{ steps.bump.outputs.new_version }}" > VERSION
-          echo "Файл VERSION обновлен до версии ${{ steps.bump.outputs.new_version }}"
+          echo "✅ Файл VERSION обновлен:"
+          cat VERSION
 
       - name: Force push new version
         run: |
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
           
+          # Определяем целевую ветку (куда был сделан мерж)
+          TARGET_BRANCH="${{ github.event.pull_request.base.ref }}"
+          echo "🎯 Целевая ветка: $TARGET_BRANCH"
+          
+          # 🔴 ВАЖНО: Переключаемся на правильную ветку
+          echo "🔄 Переключаемся на ветку $TARGET_BRANCH..."
+          git checkout $TARGET_BRANCH
+          
           # Проверяем текущее состояние
-          echo "Текущий статус:"
+          echo "📊 Текущий статус:"
           git status
+          echo "🌿 Текущая ветка:"
+          git branch --show-current
           
           # Добавляем файл
           git add VERSION
           
           # Делаем коммит
-          git commit -m "[${{ steps.bump.outputs.new_version }}] <- [${{ steps.bump.outputs.old_version }}] ${{ steps.bump.outputs.version_type }} up" || echo "Нет изменений для коммита"
+          git commit -m "[${{ steps.bump.outputs.new_version }}] <- [${{ steps.bump.outputs.old_version }}] ${{ steps.bump.outputs.version_type }} up" || echo "ℹ️ Нет изменений для коммита"
           
           # Получаем последние изменения с удаленного репозитория
-          echo "Получаем последние изменения..."
-          git fetch origin
+          echo "⬇️ Получаем последние изменения из origin/$TARGET_BRANCH..."
+          git fetch origin $TARGET_BRANCH
           
           # Показываем различия
-          echo "Различия между локальной и удаленной ветками:"
-          git log HEAD..origin/${{ github.event.pull_request.base.ref }} --oneline || echo "Нет различий"
+          echo "🔍 Различия между локальной и удаленной ветками:"
+          git log HEAD..origin/$TARGET_BRANCH --oneline || echo "ℹ️ Удаленная ветка не найдена или нет различий"
           
-          # ПРИНУДИТЕЛЬНЫЙ PUSH (ВНИМАНИЕ: перезаписывает историю!)
-          echo "Выполняем force push..."
-          git push --force origin ${{ github.event.pull_request.base.ref }}
-          
-          echo "✅ Force push выполнен успешно!"
+          # Проверяем, есть ли что пушить
+          if git diff --quiet HEAD origin/$TARGET_BRANCH 2>/dev/null; then
+            echo "ℹ️ Нет изменений для отправки"
+          else
+            # ПРИНУДИТЕЛЬНЫЙ PUSH
+            echo "🚀 Выполняем force push в $TARGET_BRANCH..."
+            git push --force origin $TARGET_BRANCH
+            echo "✅ Force push выполнен успешно!"
+            
+            # Показываем результат
+            echo "📋 Последние коммиты после push:"
+            git log --oneline -3
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
