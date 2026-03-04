@@ -36,11 +36,8 @@ jobs:
           echo "Мерж выполнен: ${{ github.event.pull_request.merged }}"
           echo "Коммит PR: ${{ github.event.pull_request.merge_commit_sha }}"
           echo "Репозиторий: ${{ github.repository }}"
+          echo "Текущий SHA: ${{ github.sha }}"
           echo "================================"
-          echo "Текущая директория:"
-          pwd
-          echo "Содержимое:"
-          ls -la
 
       - name: Get current version
         id: get_current
@@ -104,51 +101,53 @@ jobs:
           echo "✅ Файл VERSION обновлен:"
           cat VERSION
 
-      - name: Force push new version
+      - name: Commit and push new version
         run: |
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
           
-          # Определяем целевую ветку (куда был сделан мерж)
+          # Определяем целевую ветку
           TARGET_BRANCH="${{ github.event.pull_request.base.ref }}"
           echo "🎯 Целевая ветка: $TARGET_BRANCH"
           
-          # 🔴 ВАЖНО: Переключаемся на правильную ветку
+          # Переключаемся на целевую ветку
           echo "🔄 Переключаемся на ветку $TARGET_BRANCH..."
           git checkout $TARGET_BRANCH
           
           # Проверяем текущее состояние
           echo "📊 Текущий статус:"
           git status
-          echo "🌿 Текущая ветка:"
-          git branch --show-current
           
           # Добавляем файл
           git add VERSION
           
-          # Делаем коммит
-          git commit -m "[${{ steps.bump.outputs.new_version }}] <- [${{ steps.bump.outputs.old_version }}] ${{ steps.bump.outputs.version_type }} up" || echo "ℹ️ Нет изменений для коммита"
-          
-          # Получаем последние изменения с удаленного репозитория
-          echo "⬇️ Получаем последние изменения из origin/$TARGET_BRANCH..."
-          git fetch origin $TARGET_BRANCH
-          
-          # Показываем различия
-          echo "🔍 Различия между локальной и удаленной ветками:"
-          git log HEAD..origin/$TARGET_BRANCH --oneline || echo "ℹ️ Удаленная ветка не найдена или нет различий"
-          
-          # Проверяем, есть ли что пушить
-          if git diff --quiet HEAD origin/$TARGET_BRANCH 2>/dev/null; then
-            echo "ℹ️ Нет изменений для отправки"
+          # Делаем коммит (если есть изменения)
+          if git diff --staged --quiet; then
+            echo "ℹ️ Нет изменений для коммита"
           else
-            # ПРИНУДИТЕЛЬНЫЙ PUSH
-            echo "🚀 Выполняем force push в $TARGET_BRANCH..."
-            git push --force origin $TARGET_BRANCH
-            echo "✅ Force push выполнен успешно!"
+            git commit -m "[${{ steps.bump.outputs.new_version }}] <- [${{ steps.bump.outputs.old_version }}] ${{ steps.bump.outputs.version_type }} up"
+            echo "✅ Коммит создан"
             
-            # Показываем результат
-            echo "📋 Последние коммиты после push:"
-            git log --oneline -3
+            # Получаем последние изменения и делаем rebase
+            echo "⬇️ Получаем последние изменения из origin/$TARGET_BRANCH..."
+            git fetch origin $TARGET_BRANCH
+            
+            # Делаем rebase на актуальное состояние
+            echo "🔄 Выполняем rebase..."
+            git rebase origin/$TARGET_BRANCH || {
+              echo "⚠️ Rebase не удался, отменяем"
+              git rebase --abort
+            }
+            
+            # Пытаемся отправить изменения
+            echo "🚀 Отправляем изменения в $TARGET_BRANCH..."
+            if git push origin $TARGET_BRANCH; then
+              echo "✅ Push выполнен успешно"
+            else
+              echo "⚠️ Обычный push не удался, пробуем force-with-lease..."
+              git push --force-with-lease origin $TARGET_BRANCH
+              echo "✅ Force-with-lease push выполнен успешно"
+            fi
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -159,25 +158,42 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
       - name: Add version label using GitHub Script
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const newVersion = '${{ needs.bump-version.outputs.new_version }}';
-            const labelName = `v${newVersion}`;
             
-            console.log(`Attempting to add label: ${labelName} to PR #${context.issue.number}`);
+            if (!newVersion) {
+              console.log('❌ Новая версия не определена');
+              return;
+            }
+            
+            const labelName = `v${newVersion}`;
+            const prNumber = context.issue.number;
+            
+            console.log(`📝 Добавление метки: ${labelName} к PR #${prNumber}`);
             
             try {
-              // Сначала проверяем, существует ли метка
+              // Проверяем существование метки
+              let labelExists = true;
               await github.rest.issues.getLabel({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 name: labelName
-              }).catch(async () => {
-                // Если метка не существует, создаём её
-                console.log(`Label ${labelName} does not exist, creating...`);
+              }).catch(() => {
+                labelExists = false;
+              });
+              
+              // Создаем метку, если не существует
+              if (!labelExists) {
+                console.log(`🏷️ Создание новой метки: ${labelName}`);
                 await github.rest.issues.createLabel({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -185,18 +201,17 @@ jobs:
                   color: '0e8a16',
                   description: `Version ${newVersion}`
                 });
-              });
+              }
               
               // Добавляем метку к PR
               await github.rest.issues.addLabels({
-                issue_number: context.issue.number,
+                issue_number: prNumber,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 labels: [labelName]
               });
               
-              console.log(`✅ Successfully added label ${labelName}`);
+              console.log(`✅ Метка ${labelName} успешно добавлена к PR #${prNumber}`);
             } catch (error) {
-              console.log(`❌ Error: ${error.message}`);
-              // Не проваливаем задание, если метку не удалось добавить
+              console.log(`❌ Ошибка при добавлении метки: ${error.message}`);
             }
