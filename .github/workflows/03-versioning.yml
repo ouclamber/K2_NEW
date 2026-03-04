@@ -27,16 +27,6 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Debug information
-        run: |
-          echo "=== ОТЛАДОЧНАЯ ИНФОРМАЦИЯ ==="
-          echo "Событие: ${{ github.event_name }}"
-          echo "Ветка PR (base): ${{ github.event.pull_request.base.ref }}"
-          echo "Ветка PR (head): ${{ github.event.pull_request.head.ref }}"
-          echo "Мерж выполнен: ${{ github.event.pull_request.merged }}"
-          echo "Репозиторий: ${{ github.repository }}"
-          echo "================================"
-
       - name: Get current version
         id: get_current
         run: |
@@ -44,25 +34,23 @@ jobs:
             CURRENT_VERSION=$(cat VERSION)
           else
             CURRENT_VERSION="0.1.0"
-            echo "0.1.0" > VERSION
           fi
           echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-          echo "✅ Текущая версия: $CURRENT_VERSION"
+          echo "Текущая версия: $CURRENT_VERSION"
 
       - name: Determine version bump type
         id: get_type
         run: |
           COMMITS=$(git log ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} --pretty=format:"%s")
-          
           if echo "$COMMITS" | grep -qiE "^(feat|feature):"; then
             echo "type=minor" >> $GITHUB_OUTPUT
-            echo "✅ Тип обновления: minor"
+            echo "Тип обновления: minor"
           elif echo "$COMMITS" | grep -qiE "^(fix|hotfix):"; then
             echo "type=patch" >> $GITHUB_OUTPUT
-            echo "✅ Тип обновления: patch"
+            echo "Тип обновления: patch"
           else
             echo "type=patch" >> $GITHUB_OUTPUT
-            echo "✅ Тип обновления: patch (по умолчанию)"
+            echo "Тип обновления: patch (по умолчанию)"
           fi
 
       - name: Bump version
@@ -87,14 +75,14 @@ jobs:
           echo "old_version=$CURRENT" >> $GITHUB_OUTPUT
           echo "version_type=$VERSION_TYPE" >> $GITHUB_OUTPUT
           
-          echo "📊 Старая версия: $CURRENT"
-          echo "📊 Новая версия: $NEW_VERSION"
-          echo "📊 Тип: $VERSION_TYPE"
+          echo "Старая версия: $CURRENT"
+          echo "Новая версия: $NEW_VERSION"
+          echo "Тип: $VERSION_TYPE"
 
       - name: Update VERSION file
         run: |
           echo "${{ steps.bump.outputs.new_version }}" > VERSION
-          echo "✅ Файл VERSION обновлен до версии ${{ steps.bump.outputs.new_version }}"
+          echo "Файл VERSION обновлен до версии ${{ steps.bump.outputs.new_version }}"
 
       - name: Force push new version
         run: |
@@ -113,17 +101,9 @@ jobs:
           git add VERSION
           
           # Делаем коммит
-          git commit -m "[${{ steps.bump.outputs.new_version }}] <- [${{ steps.bump.outputs.old_version }}] ${{ steps.bump.outputs.version_type }} up" || echo "ℹ️ Нет изменений для коммита"
+          git commit -m "[${{ steps.bump.outputs.new_version }}] <- [${{ steps.bump.outputs.old_version }}] ${{ steps.bump.outputs.version_type }} up"
           
-          # ПОЛУЧАЕМ ПОСЛЕДНИЕ ИЗМЕНЕНИЯ
-          echo "⬇️ Получаем последние изменения..."
-          git fetch origin $TARGET_BRANCH
-          
-          # ДЕЛАЕМ REBASE (объединяем с удаленными изменениями)
-          echo "🔄 Делаем rebase на origin/$TARGET_BRANCH..."
-          git rebase origin/$TARGET_BRANCH || echo "⚠️ Rebase не удался, но продолжаем"
-          
-          # ПРИНУДИТЕЛЬНЫЙ PUSH
+          # ПРОСТО FORCE PUSH (без rebase, без pull)
           echo "🚀 Выполняем force push в $TARGET_BRANCH..."
           git push --force origin $TARGET_BRANCH
           
@@ -137,7 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true
     steps:
-      - name: Add version label
+      - name: Add version label using GitHub Script
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -145,21 +125,23 @@ jobs:
             const newVersion = '${{ needs.bump-version.outputs.new_version }}';
             const labelName = `v${newVersion}`;
             
-            console.log(`Добавление метки: ${labelName} к PR #${context.issue.number}`);
+            console.log(`Attempting to add label: ${labelName} to PR #${context.issue.number}`);
             
             try {
-              // Создаем метку, если не существует
-              await github.rest.issues.createLabel({
+              await github.rest.issues.getLabel({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                name: labelName,
-                color: '0e8a16',
-                description: `Version ${newVersion}`
-              }).catch(() => {
-                console.log(`Метка ${labelName} уже существует`);
+                name: labelName
+              }).catch(async () => {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: labelName,
+                  color: '0e8a16',
+                  description: `Version ${newVersion}`
+                });
               });
               
-              // Добавляем метку к PR
               await github.rest.issues.addLabels({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
@@ -167,7 +149,7 @@ jobs:
                 labels: [labelName]
               });
               
-              console.log(`✅ Метка ${labelName} добавлена`);
+              console.log(`✅ Successfully added label ${labelName}`);
             } catch (error) {
-              console.log(`❌ Ошибка: ${error.message}`);
+              console.log(`❌ Error: ${error.message}`);
             }
