@@ -79,35 +79,38 @@ jobs:
           echo "Новая версия: $NEW_VERSION"
           echo "Тип: $VERSION_TYPE"
 
-      - name: Update VERSION file
-        run: |
-          echo "${{ steps.bump.outputs.new_version }}" > VERSION
-          echo "Файл VERSION обновлен до версии ${{ steps.bump.outputs.new_version }}"
-
-      - name: Force push new version
+      - name: HARD RESET and force push
         run: |
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
           
-          # Определяем целевую ветку
           TARGET_BRANCH="${{ github.event.pull_request.base.ref }}"
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          
           echo "🎯 Целевая ветка: $TARGET_BRANCH"
+          echo "📊 Новая версия: $NEW_VERSION"
           
-          # Переключаемся на целевую ветку
-          echo "🔄 Переключаемся на ветку $TARGET_BRANCH..."
-          git checkout $TARGET_BRANCH
+          # Получаем последнее состояние удаленной ветки
+          echo "⬇️ Получаем последнее состояние origin/$TARGET_BRANCH..."
+          git fetch origin $TARGET_BRANCH
           
-          # Добавляем файл
+          # ЖЕСТКИЙ RESET до состояния удаленной ветки
+          echo "🔄 Делаем hard reset до origin/$TARGET_BRANCH..."
+          git reset --hard origin/$TARGET_BRANCH
+          
+          # Обновляем файл VERSION
+          echo "📝 Обновляем файл VERSION..."
+          echo "$NEW_VERSION" > VERSION
+          
+          # Добавляем и коммитим
           git add VERSION
+          git commit -m "[$NEW_VERSION] version update"
           
-          # Делаем коммит
-          git commit -m "[${{ steps.bump.outputs.new_version }}] <- [${{ steps.bump.outputs.old_version }}] ${{ steps.bump.outputs.version_type }} up"
-          
-          # ПРОСТО FORCE PUSH (без rebase, без pull)
-          echo "🚀 Выполняем force push в $TARGET_BRANCH..."
+          # ПРИНУДИТЕЛЬНЫЙ PUSH
+          echo "🚀 Выполняем force push..."
           git push --force origin $TARGET_BRANCH
           
-          echo "✅ Force push выполнен успешно!"
+          echo "✅ Готово!"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
