@@ -36,6 +36,7 @@ jobs:
             CURRENT_VERSION="0.1.0"
           fi
           echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Текущая версия: $CURRENT_VERSION"
 
       - name: Determine version bump type
         id: get_type
@@ -43,10 +44,13 @@ jobs:
           COMMITS=$(git log ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} --pretty=format:"%s")
           if echo "$COMMITS" | grep -qiE "^(feat|feature):"; then
             echo "type=minor" >> $GITHUB_OUTPUT
+            echo "Тип обновления: minor"
           elif echo "$COMMITS" | grep -qiE "^(fix|hotfix):"; then
             echo "type=patch" >> $GITHUB_OUTPUT
+            echo "Тип обновления: patch"
           else
             echo "type=patch" >> $GITHUB_OUTPUT
+            echo "Тип обновления: patch (по умолчанию)"
           fi
 
       - name: Bump version
@@ -55,29 +59,59 @@ jobs:
           CURRENT="${{ steps.get_current.outputs.current_version }}"
           TYPE="${{ steps.get_type.outputs.type }}"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          
           if [ "$TYPE" = "minor" ]; then
             MINOR=$((MINOR + 1))
             PATCH=0
-            echo "version_type=minor" >> $GITHUB_OUTPUT
+            VERSION_TYPE="minor"
           else
             PATCH=$((PATCH + 1))
-            echo "version_type=patch" >> $GITHUB_OUTPUT
+            VERSION_TYPE="patch"
           fi
+          
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "old_version=$CURRENT" >> $GITHUB_OUTPUT
+          echo "version_type=$VERSION_TYPE" >> $GITHUB_OUTPUT
+          
+          echo "Старая версия: $CURRENT"
+          echo "Новая версия: $NEW_VERSION"
+          echo "Тип: $VERSION_TYPE"
 
       - name: Update VERSION file
         run: |
           echo "${{ steps.bump.outputs.new_version }}" > VERSION
+          echo "Файл VERSION обновлен до версии ${{ steps.bump.outputs.new_version }}"
 
-      - name: Commit new version
+      - name: Force push new version
         run: |
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
+          
+          # Проверяем текущее состояние
+          echo "Текущий статус:"
+          git status
+          
+          # Добавляем файл
           git add VERSION
-          git commit -m "[${{ steps.bump.outputs.new_version }}] <- [${{ steps.bump.outputs.old_version }}] ${{ steps.bump.outputs.version_type }} up" || echo "No changes"
-          git push
+          
+          # Делаем коммит
+          git commit -m "[${{ steps.bump.outputs.new_version }}] <- [${{ steps.bump.outputs.old_version }}] ${{ steps.bump.outputs.version_type }} up" || echo "Нет изменений для коммита"
+          
+          # Получаем последние изменения с удаленного репозитория
+          echo "Получаем последние изменения..."
+          git fetch origin
+          
+          # Показываем различия
+          echo "Различия между локальной и удаленной ветками:"
+          git log HEAD..origin/${{ github.event.pull_request.base.ref }} --oneline || echo "Нет различий"
+          
+          # ПРИНУДИТЕЛЬНЫЙ PUSH (ВНИМАНИЕ: перезаписывает историю!)
+          echo "Выполняем force push..."
+          git push --force origin ${{ github.event.pull_request.base.ref }}
+          
+          echo "✅ Force push выполнен успешно!"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -115,7 +149,7 @@ jobs:
                 });
               });
               
-              // Добавляем метку к PR (даже если он закрыт)
+              // Добавляем метку к PR
               await github.rest.issues.addLabels({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
@@ -127,5 +161,4 @@ jobs:
             } catch (error) {
               console.log(`❌ Error: ${error.message}`);
               // Не проваливаем задание, если метку не удалось добавить
-              // (например, если PR уже закрыт - API может вернуть ошибку)
             }
