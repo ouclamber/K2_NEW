@@ -84,28 +84,34 @@ jobs:
           echo "${{ steps.bump.outputs.new_version }}" > VERSION
           echo "Файл VERSION обновлен до версии ${{ steps.bump.outputs.new_version }}"
 
-      - name: Commit and push new version
+      - name: Force push new version
         run: |
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
           
+          # Проверяем текущее состояние
+          echo "Текущий статус:"
+          git status
+          
           # Добавляем файл
           git add VERSION
           
-          # Делаем коммит (если есть изменения)
+          # Делаем коммит
           git commit -m "[${{ steps.bump.outputs.new_version }}] <- [${{ steps.bump.outputs.old_version }}] ${{ steps.bump.outputs.version_type }} up" || echo "Нет изменений для коммита"
           
-          # Пытаемся отправить изменения с автоматическим решением конфликтов
-          git pull --rebase origin ${{ github.event.pull_request.base.ref }} || {
-            echo "Pull с rebase не удался, пробуем без rebase"
-            git pull origin ${{ github.event.pull_request.base.ref }} --no-rebase
-          }
+          # Получаем последние изменения с удаленного репозитория
+          echo "Получаем последние изменения..."
+          git fetch origin
           
-          # Отправляем изменения
-          git push origin ${{ github.event.pull_request.base.ref }} || {
-            echo "Обычный push не удался, пробуем force-with-lease"
-            git push --force-with-lease origin ${{ github.event.pull_request.base.ref }}
-          }
+          # Показываем различия
+          echo "Различия между локальной и удаленной ветками:"
+          git log HEAD..origin/${{ github.event.pull_request.base.ref }} --oneline || echo "Нет различий"
+          
+          # ПРИНУДИТЕЛЬНЫЙ PUSH (ВНИМАНИЕ: перезаписывает историю!)
+          echo "Выполняем force push..."
+          git push --force origin ${{ github.event.pull_request.base.ref }}
+          
+          echo "✅ Force push выполнен успешно!"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -154,4 +160,5 @@ jobs:
               console.log(`✅ Successfully added label ${labelName}`);
             } catch (error) {
               console.log(`❌ Error: ${error.message}`);
+              // Не проваливаем задание, если метку не удалось добавить
             }
