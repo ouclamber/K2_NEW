@@ -1,0 +1,131 @@
+name: "03 - Автоматическое обновление версии"
+
+on:
+  pull_request:
+    branches: [main, master]
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  bump-version:
+    name: "Обновление версии"
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+      old_version: ${{ steps.bump.outputs.old_version }}
+      version_type: ${{ steps.bump.outputs.version_type }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get current version
+        id: get_current
+        run: |
+          if [ -f VERSION ]; then
+            CURRENT_VERSION=$(cat VERSION)
+          else
+            CURRENT_VERSION="0.1.0"
+          fi
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Determine version bump type
+        id: get_type
+        run: |
+          COMMITS=$(git log ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} --pretty=format:"%s")
+          if echo "$COMMITS" | grep -qiE "^(feat|feature):"; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+          elif echo "$COMMITS" | grep -qiE "^(fix|hotfix):"; then
+            echo "type=patch" >> $GITHUB_OUTPUT
+          else
+            echo "type=patch" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Bump version
+        id: bump
+        run: |
+          CURRENT="${{ steps.get_current.outputs.current_version }}"
+          TYPE="${{ steps.get_type.outputs.type }}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          if [ "$TYPE" = "minor" ]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+            echo "version_type=minor" >> $GITHUB_OUTPUT
+          else
+            PATCH=$((PATCH + 1))
+            echo "version_type=patch" >> $GITHUB_OUTPUT
+          fi
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "old_version=$CURRENT" >> $GITHUB_OUTPUT
+
+      - name: Update VERSION file
+        run: |
+          echo "${{ steps.bump.outputs.new_version }}" > VERSION
+
+      - name: Commit new version
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add VERSION
+          git commit -m "[${{ steps.bump.outputs.new_version }}] <- [${{ steps.bump.outputs.old_version }}] ${{ steps.bump.outputs.version_type }} up" || echo "No changes"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  add-version-label:
+    name: "Добавить label с версией"
+    needs: bump-version
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Add version label using GitHub Script
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const newVersion = '${{ needs.bump-version.outputs.new_version }}';
+            const labelName = `v${newVersion}`;
+            
+            console.log(`Attempting to add label: ${labelName} to PR #${context.issue.number}`);
+            
+            try {
+              // Сначала проверяем, существует ли метка
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: labelName
+              }).catch(async () => {
+                // Если метка не существует, создаём её
+                console.log(`Label ${labelName} does not exist, creating...`);
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: labelName,
+                  color: '0e8a16',
+                  description: `Version ${newVersion}`
+                });
+              });
+              
+              // Добавляем метку к PR (даже если он закрыт)
+              await github.rest.issues.addLabels({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: [labelName]
+              });
+              
+              console.log(`✅ Successfully added label ${labelName}`);
+            } catch (error) {
+              console.log(`❌ Error: ${error.message}`);
+              // Не проваливаем задание, если метку не удалось добавить
+              // (например, если PR уже закрыт - API может вернуть ошибку)
+            }

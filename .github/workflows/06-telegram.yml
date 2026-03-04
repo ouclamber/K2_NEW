@@ -1,0 +1,51 @@
+name: "06 - Уведомление в Telegram"
+
+on:
+  workflow_run:
+    workflows: ["05 - Публикация в Docker Hub"]
+    types: [completed]
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  telegram-notify:
+    name: "Send to Telegram"
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION)
+          else
+            VERSION="0.1.0"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download changelog artifact
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: 04-changelog.yml
+          name: changelog
+          path: ./artifacts
+          run_id: ${{ github.event.workflow_run.id }}
+
+      - name: Send to Telegram
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            🎉 Новый релиз v${{ steps.get_version.outputs.version }}!
+            📦 Проект: ${{ github.repository }}
+            🔗 https://github.com/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}
+          document: artifacts/changelog.md
+          format: markdown

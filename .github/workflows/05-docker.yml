@@ -1,0 +1,95 @@
+name: "05 - Публикация в Docker Hub"
+
+on:
+  pull_request:
+    branches: [main, master]
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  docker-build-push:
+    name: "Build and Push Docker Image"
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      image_name: ${{ env.IMAGE_NAME }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION)
+          else
+            VERSION="0.1.0"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set image name
+        run: echo "IMAGE_NAME=${{ github.repository_owner }}/$(basename ${{ github.repository }})" >> $GITHUB_ENV
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:v${{ steps.get_version.outputs.version }}
+            ${{ env.IMAGE_NAME }}:latest
+
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.IMAGE_NAME }}
+          readme-filepath: ./README.md
+
+  add-docker-label:
+    name: "Добавить label dockerhub"
+    needs: docker-build-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add dockerhub label
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'dockerhub'
+              }).catch(async () => {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'dockerhub',
+                  color: '0e8a16',
+                  description: 'Published to Docker Hub'
+                });
+              });
+              
+              await github.rest.issues.addLabels({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['dockerhub']
+              });
+            } catch (error) {
+              console.log('Note: Label may not be added due to PR state');
+            }

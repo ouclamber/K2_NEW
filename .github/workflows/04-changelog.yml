@@ -1,0 +1,131 @@
+name: "04 - Формирование changelog.md"
+
+on:
+  pull_request:
+    branches: [main, master]
+    types: [closed]
+
+# ИСПРАВЛЕНО: Добавлены все необходимые права
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write   # <--- Добавлено для меток
+
+jobs:
+  generate-changelog:
+    name: "Генерация changelog"
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION)
+          else
+            VERSION="0.1.0"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Get commit messages
+        id: commits
+        run: |
+          COMMITS=$(git log ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} --pretty=format:"- %s" | head -20)
+          # Экранируем для безопасного использования в echo
+          COMMITS="${COMMITS//'%'/'%25'}"
+          COMMITS="${COMMITS//$'\n'/'%0A'}"
+          COMMITS="${COMMITS//$'\r'/'%0D'}"
+          echo "commits=$COMMITS" >> $GITHUB_OUTPUT
+
+      - name: Create changelog entry
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          VERSION="${{ steps.get_version.outputs.version }}"
+          echo "## v$VERSION ($DATE)" > new_changelog.md
+          echo "" >> new_changelog.md
+          echo "### Изменения:" >> new_changelog.md
+          
+          # Декодируем коммиты обратно
+          echo -e "${{ steps.commits.outputs.commits }}" >> new_changelog.md
+          
+          echo "" >> new_changelog.md
+          echo "---" >> new_changelog.md
+          echo "" >> new_changelog.md
+          if [ -f changelog.md ]; then
+            cat changelog.md >> new_changelog.md
+          fi
+          mv new_changelog.md changelog.md
+
+      - name: Commit changelog
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add changelog.md
+          git commit -m "docs: update changelog for v${{ steps.get_version.outputs.version }}" || echo "No changes"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save changelog as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: changelog
+          path: changelog.md
+          retention-days: 30
+
+  add-changelog-label:
+    name: "Добавить label changelog"
+    needs: generate-changelog
+    runs-on: ubuntu-latest
+    # ВАЖНО: Добавляем проверку, что PR был merged
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Add changelog label using GitHub Script
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const labelName = 'changelog';
+            
+            console.log(`Attempting to add label: ${labelName} to PR #${context.issue.number}`);
+            
+            try {
+              // Сначала проверяем, существует ли метка
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: labelName
+              }).catch(async () => {
+                // Если метка не существует, создаём её
+                console.log(`Label ${labelName} does not exist, creating...`);
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: labelName,
+                  color: 'fbca04', // Жёлтый цвет для changelog
+                  description: 'Changelog generated for this PR'
+                });
+              });
+              
+              // Пытаемся добавить метку к PR (даже если он закрыт)
+              await github.rest.issues.addLabels({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: [labelName]
+              });
+              
+              console.log(`✅ Successfully added label ${labelName}`);
+            } catch (error) {
+              console.log(`⚠️ Could not add label: ${error.message}`);
+              console.log('This is expected if the PR is already closed. Workflow continues.');
+              // Не проваливаем задание, если метку не удалось добавить
+            }

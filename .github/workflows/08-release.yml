@@ -1,0 +1,49 @@
+name: "08 - Создание релиза"
+
+on:
+  workflow_run:
+    workflows: ["07 - Деплой в PROD"]
+    types: [completed]
+    branches: [main, master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-release:
+    name: "Create GitHub Release"
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION)
+          else
+            VERSION="0.1.0"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}
+          release_name: Release v${{ steps.get_version.outputs.version }}
+          body: |
+            ## 🎉 Release v${{ steps.get_version.outputs.version }}
+            ### 🐳 Docker:
+            ```bash
+            docker pull ${{ github.repository_owner }}/$(basename ${{ github.repository }}):v${{ steps.get_version.outputs.version }}
+            ```
+          draft: false
+          prerelease: false

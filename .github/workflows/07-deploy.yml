@@ -1,0 +1,74 @@
+name: "07 - Деплой в PROD"
+
+on:
+  workflow_run:
+    workflows: ["06 - Уведомление в Telegram"]
+    types: [completed]
+    branches: [main, master]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  deploy-prod:
+    name: "Deploy to Production"
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION)
+          else
+            VERSION="0.1.0"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set image name
+        run: echo "IMAGE_NAME=${{ github.repository_owner }}/$(basename ${{ github.repository }})" >> $GITHUB_ENV
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull new image
+        run: docker pull ${{ env.IMAGE_NAME }}:v${{ steps.get_version.outputs.version }} || echo "Image pull skipped"
+
+      - name: Add PROD label
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'PROD'
+              }).catch(async () => {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'PROD',
+                  color: 'e99695',
+                  description: 'Deployed to production'
+                });
+              });
+              
+              await github.rest.issues.addLabels({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['PROD']
+              });
+            } catch (error) {
+              console.log('Note: Label may not be added due to PR state');
+            }

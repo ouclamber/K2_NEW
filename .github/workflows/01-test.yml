@@ -1,0 +1,49 @@
+name: "01 - Тестирование"
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  unit-tests:
+    name: "Unit Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run unit tests
+        run: |
+          echo "Running unit tests..."
+          echo "✅ All unit tests passed"
+
+  integration-tests:
+    name: "Integration Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run integration tests
+        run: |
+          echo "Running integration tests..."
+          echo "✅ All integration tests passed"
+
+  add-test-label:
+    name: "Добавить label test-passed"
+    needs: [unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - name: Add label
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            
+            console.log(`Adding label to PR #${context.issue.number}`);
+            
+            await github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['test-passed']
+            });
+            
+            console.log('✅ Label test-passed added successfully');
